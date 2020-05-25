@@ -1,0 +1,13 @@
+[submodule "libspin"]
+	path = libspin
+	url = git@github.com:SwarmArch/libspin.git
+[submodule "plsalloc"]
+	path = plsalloc
+	url = git@github.com:SwarmArch/plsalloc.git
+[submodule "runtime"]
+	path = runtime
+	url = git@github.com:SwarmArch/runtime.git
+[submodule "googletest"]
+	path = googletest
+	url = https://github.com/SwarmArch/googletest.git
+	branch = v1.10.x
