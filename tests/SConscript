@@ -1,0 +1,87 @@
+from __future__ import (absolute_import, division, print_function)
+
+import os
+Import('env')
+Import('libsimalloc')
+Import('runtime')
+
+env = env.Clone()
+env.Append(CPPPATH = [Dir('.').srcnode().abspath])
+env.Append(CPPDEFINES = {'SWARM_CACHE_LINE' : 64,
+                         runtime.upper() + '_RUNTIME' : 1,
+                         })
+env.Append(CXXFLAGS = ['-std=c++14'])
+env.Append(CFLAGS = ['-std=c11', '-Wstrict-prototypes'])
+
+# Linux distros have been enabling more compiler options by default to improve
+# security, even if it may hurt performance and breaks some builds.  See:
+# https://wiki.ubuntu.com/ToolChain/CompilerFlags
+# https://wiki.debian.org/Hardening
+# Let's fight the nanny distros and try to get more consistent behavior
+# by disabling new security-related compiler features.
+#
+# Ubuntu 14.10 and later systems enable -fstack-protector-strong by default.
+# This generates extra accesses to thread-local storage to get canary values
+# that are placed on the stack.  We want to avoid these memory accesses,
+# which incur needless conflict checks:
+env.Append(CPPFLAGS = ['-fno-stack-protector'])
+# Ubuntu 16.10 and later systems enable PIE by default, which is incompatible
+# with the local labels within inline asm in the Swarm runtime.
+if not GetOption('clang'):
+    env.Append(CPPFLAGS = ['-no-pie', '-fno-PIE'])
+    env.Append(LINKFLAGS = ['-no-pie', '-fno-PIE'])
+# Ubuntu 19.10 enables -fstack-clash-protection and -fcf-protection by default.
+# These flags don't exist prior to GCC 8.
+#env.Append(CPPFLAGS = ['-fno-stack-clash-protection', '-fcf-protection=none'])
+
+env.Append(LIBS = ['pthread'])
+
+programs = Glob('*.cpp', strings=True) + Glob('*.c', strings=True)
+
+variant_programs = {
+    'bfs.cpp' : [('cg', 'COARSE_GRAIN_TASKS')],
+    'roi_exit.cpp' : [('syscall', 'TRY_SYS_EXIT'), ('group_syscall', 'TRY_SYS_EXIT_GROUP')],
+}
+
+max_arguments = {
+    'bfs' : 3,
+    'precede_stallers' : 4,
+    'taskbomb' : 2,
+    'taskbomb_tied' : 3,
+}
+
+allocators = {
+    'swarm' : ['simalloc', 'tcmalloc'],
+    'seq' : ['simalloc', 'native'],
+}
+assert runtime in allocators
+
+def build(program, variantArgs = None):
+    program_basename, _ = os.path.splitext(program)
+    local = env.Clone()
+    if program_basename in max_arguments:
+        local.Append(CPPDEFINES = {'PLS_APP_MAX_ARGS' :
+                                   max_arguments[program_basename]})
+    programSuffix = ""
+    if variantArgs:
+        (variantSuffix, variantDefine) = variantArgs
+        local.Append(CPPDEFINES = [variantDefine])
+        local["OBJSUFFIX"] = "_" + variantSuffix + ".o"
+        programSuffix = "_" + variantSuffix
+
+    objects = [local.Object(program)]
+
+    for alloc in allocators[runtime]:
+        allocenv = local.Clone()
+        if alloc == "simalloc": allocenv.Prepend(LIBS = [libsimalloc])
+        if alloc == "tcmalloc": allocenv.Prepend(LIBS = ['tcmalloc_minimal'])
+        programpath = program_basename + programSuffix
+        if alloc != 'simalloc': programpath = os.path.join(alloc, programpath)
+        allocenv.Program(target=programpath, source=objects)
+
+for p in programs: build(p)
+for (p, varList) in list(variant_programs.items()):
+    for var in varList: build(p, var)
+
+if runtime == 'swarm' and not GetOption('clang'):
+    SConscript('load_balance/SConscript', exports = ['env'], duplicate=0)

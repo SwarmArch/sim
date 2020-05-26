@@ -1,0 +1,7 @@
+BasedOnStyle:  Google
+IndentWidth: 4
+AccessModifierOffset: -2
+AlwaysBreakTemplateDeclarations: false
+
+# Mark liked to have two blank lines between functions
+MaxEmptyLinesToKeep: 2

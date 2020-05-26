@@ -1,0 +1,174 @@
+#######################################################################
+# Assumes Pin v. 2.14 for the include, lib, and linker paths
+#######################################################################
+
+from __future__ import (absolute_import, division, print_function)
+
+import os
+import platform
+
+Import('env')
+
+pinEnv = env.Clone()
+
+# In some environments, it is challenging to make Pin 2.14 compatible with
+# pintools built with g++ versions >= 5.0.  We have tested the simulator build
+# with g++-4.8, the default system compiler in Ubuntu 14.04 LTS.
+AddOption('--sim-gcc-48', dest='sim_gcc_48', default=False, action='store_true',
+          help='Build the simulator with g++-4.8 (may fix Pin 2.14 ABI compatibility)')
+if GetOption('sim_gcc_48'):
+    pinEnv['CC'] = 'gcc-4.8'
+    pinEnv['CXX'] = 'g++-4.8'
+
+pinEnv.Append(CPPFLAGS = ['-std=c++11', '-Wno-unknown-pragmas',
+    '-Werror=missing-field-initializers',
+    '-fno-omit-frame-pointer', '-fno-stack-protector', '-MMD', '-fPIC'])
+
+if not GetOption('clang'):
+    pinEnv.Append(CPPFLAGS = ['-fabi-version=2', '-D_GLIBCXX_USE_CXX11_ABI=0'])
+
+pinEnv.Append(CPPDEFINES = [
+    ('BIGARRAY_MULTIPLIER',1), 'USING_XED', 'TARGET_IA32E', 'HOST_IA32E',
+    'TARGET_LINUX'])
+
+PINPATH = os.environ["PINPATH"]
+
+pinEnv.Append(CPPPATH =
+    [os.path.join(PINPATH, dir) for dir in (
+    'extras/xed-intel64/include',
+    'source/include',
+    # [mcj] the following directory is only needed because pin doesn't use
+    # relative paths correctly... weird
+    'source/include/pin/gen',
+    'extras/components/include')])
+
+pinEnv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
+    'extras/xed-intel64/lib', 'intel64/lib', 'intel64/lib-ext')])
+
+pinEnv.Append(LIBS = ['pin', 'xed', 'dl', 'rt', 'pindwarf'])
+
+pinverspath = os.path.join(PINPATH, 'source/include/pin/pintool.ver')
+assert os.path.exists(pinverspath), pinverspath
+
+pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
+    '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
+
+simEnv = pinEnv.Clone()
+
+simEnv.Append(CPPDEFINES = ['MT_SAFE_LOG'])
+
+# Use non-standard library paths if defined
+if "LIBCONFIGPATH" in os.environ:
+    LIBCONFIGPATH = os.environ["LIBCONFIGPATH"]
+    simEnv.Append (RPATH = [os.path.join(LIBCONFIGPATH, 'lib')])
+    simEnv.Append (LIBPATH  = [os.path.join(LIBCONFIGPATH, 'lib')])
+    # Using -isystem instead of -I to silence some -Wdeprecated warnings about
+    # dynamic exception specifications in libconfig.h++
+    #simEnv.Append (CPPPATH = [os.path.join(LIBCONFIGPATH, 'include')])
+    simEnv.Append (CPPFLAGS = ['-isystem', os.path.join(LIBCONFIGPATH, 'include')])
+
+if "ARMADILLOPATH" in os.environ:
+    armadilloPath = os.environ["ARMADILLOPATH"]
+elif "ZSIMARMADILLOPATH" in os.environ:
+    armadilloPath = os.environ["ZSIMARMADILLOPATH"]
+else:
+    armadilloPath = None
+if armadilloPath:
+    # Using -isystem instead of -I to silence some warnings from Armadillo.
+    # See: https://gcc.gnu.org/onlinedocs/cpp/System-Headers.html
+    simEnv.Append(CPPFLAGS = ["-isystem", os.path.join(armadilloPath, "include")])
+
+if 'HDF5PATH' in os.environ:
+    HDF5PATH = os.environ['HDF5PATH']
+    simEnv.Append(CPPPATH = [os.path.join(HDF5PATH, 'include/')])
+    simEnv.Append(LIBPATH = [os.path.join(HDF5PATH, 'lib/')])
+    simEnv.Append(RPATH = [os.path.join(HDF5PATH, 'lib/')])
+else:
+    # libhdf5-serial-dev installs its files in different locations on newer Ubuntu versions
+    simEnv.Append(CPPPATH = ['/usr/include/hdf5/serial/'])
+    simEnv.Append(LIBPATH = ['/usr/lib/x86_64-linux-gnu/hdf5/serial/'])
+    simEnv.Append(RPATH = ['/usr/lib/x86_64-linux-gnu/hdf5/serial/'])
+
+if GetOption('interactive_sim'):
+    simEnv.Append(LIBS = ['readline'])
+
+simEnv.Append(LIBS = ['hdf5', 'hdf5_hl', 'config++', 'pthread'])
+
+libspin_slow, libspin_fast = SConscript(
+        '#libspin/lib/SConscript',
+        exports={'env': pinEnv},
+        variant_dir = 'libspin',
+        duplicate = 0)
+
+simEnv.Append(CPPPATH = ['#libspin/include'])
+
+allocSrc = Glob("alloc/*.cpp")
+initSrc = Glob("init/*.cpp")
+memorySrc = Glob("memory/*.cpp")
+coreSrc = Glob("core/*.cpp")
+conflictsSrc = Glob("conflicts/*.cpp")
+statsSrc  = Glob("stats/*.cpp")
+virtSrc = Glob("virt/*.cpp")
+simSrc = Glob("*.cpp")
+
+sources = [simSrc, statsSrc, initSrc, memorySrc,
+           coreSrc, allocSrc, conflictsSrc, virtSrc]
+
+# Range is 40 bits of addr space --> more we could ever need
+#commonPinOptions = "-pin_memory_range 0x0d0000000000:0x0e0000000000"
+# Disabled address restriction, makes Pin run out of memory
+commonPinOptions = ""
+# Run with a large code cache (2GB, instead of 256KB) to minimize flushes, and
+# use smaller cache blocks (64KB instead of the default 256KB), which seem to
+# use code cache capacity more efficiently.
+# NOTE: a code cache of ~4GB led to BranchDisplacementFit crashes in 445.gobmk
+# (https://github.mit.edu/swarm/Swarm-IR/issues/487)
+# NOTE: Code cache flushes cause Pin 2.14 / 71313 to leak memory. The severity
+# of the leak seems correlated with the (used) size of the code cache, and
+# smaller blocks also cause more leakage. But based on tests with small code
+# caches (silo2 tpcc and 4-32MB code caches), 64KB blocks cause less
+# leakage overall.
+commonPinOptions = "-xyzzy -cc_memory_size {} -cache_block_size {}".format(
+        2 * (2 ** 30), 64 * (2 ** 10))
+# By default, Pin checks the kernel version to determine whether to use parent
+# or child injection.  See:
+# https://software.intel.com/sites/landingpage/pintool/docs/71313/Pin/html/index.html#INJECTION
+# With Pin 2.14, this kernel version check errors out for Linux kernel 4.x.
+# From https://stackoverflow.com/a/40908077, it seems that explicitly
+# specifying parent injection avoids the kernel version check.
+commonPinOptions += " -injection parent"
+# On newer Linux distros, Pin 2.14 quickly dies with this error message:
+#    A: Source/pin/injector_nonmac/auxvector.cpp: CopyAux: 291: unexpected AUX VEC type 26
+# So, during startup, Pin actually checks the auxiliary vector (a set of
+# key-value pairs similar to environment variables, except that they can only
+# be set by the kernel and are used to describe the system's configuration).
+# Consulting /usr/include/linux/auxvec.h shows that type 26 in the auxiliary
+# vector is AT_HWCAP2. It appears that Linux first started using AT_HWCAP2 on
+# x86 in kernel version 4.11:
+#    https://github.com/torvalds/linux/commit/0274f9551eff55dbd63b5f5f3efe30fe5d4c801c
+# This means that it is impossible to run Pin on Ubuntu 17.10 or newer without
+# -ifeellucky.  For more information, see the man page for "getauxval".
+commonPinOptions += " -ifeellucky"
+
+commonEnvVars = ""
+# Force eager binding to avoid aborts on runtime symbol resolution
+commonEnvVars += "LD_BIND_NOW=1"
+# Enable use of HDF5 versions 1.10.1+ on NFS.  See:
+# https://bitbucket.hdfgroup.org/projects/HDFFV/repos/hdf5/browse/release_docs/HISTORY-1_10.txt?at=refs%2Ftags%2Fhdf5-1_10_2#135-144
+commonEnvVars += " HDF5_USE_FILE_LOCKING='FALSE'"
+
+for libspin, speed in [(libspin_slow, "slow"), (libspin_fast, "fast")]:
+    pintoolName = "speculator_%s.so" % speed
+    simEnv.Program(target=pintoolName, source=sources + [libspin])
+    for harnessType in ["sim", "debug"]:
+        simName = harnessType
+        if speed == "slow":
+            simName = "slow" + simName
+        harness = simEnv.Substfile("_" + simName, "harness/" + harnessType, SUBST_DICT = {
+            "speculator.so" : pintoolName,
+            "@SCONS_ENV_VARS" : commonEnvVars,
+            "@SCONS_PIN_OPTIONS" : commonPinOptions})
+        simEnv.Command(simName, harness, [Copy("$TARGET", "$SOURCE"), Chmod("$TARGET", 0o755)])
+
+Export('env')
+SConscript('test/SConscript')

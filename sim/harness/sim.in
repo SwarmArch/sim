@@ -1,0 +1,65 @@
+#!/bin/bash
+
+PIN_ARGS=$@
+APP_ARGS_TOKEN="--"
+SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SIM_PID=0
+
+onSig() {
+    exec 1>&2
+    echo "[sim] Harness received termination signal"
+    trap - SIGINT SIGTERM # avoid infinite recursive loop if we TERM ourself
+    kill -SIGTERM $SIM_PID # if 0, TERMs the whole process group including self, which is OK
+
+    # Make sure sim is dead; otherwise, hard-kill
+    sleep 1  # Allow time for simulator to print some info and die cleanly
+    let NUM_CHILDREN=`ps --no-headers -o pid --ppid=$$ | wc -w`-1
+    if [ $NUM_CHILDREN != 0 ]; then
+        echo "[sim] Simulator is not responsive, hard-killing"
+        kill -9 $SIM_PID
+        pkill -9 -P $$
+        sleep 1
+        let NUM_CHILDREN=`ps --no-headers -o pid --ppid=$$ | wc -w`-1
+        echo "[sim] Children left: $NUM_CHILDREN"
+    else
+        echo "[sim] Cleanly terminated child processes"
+    fi
+
+    exit 1
+}
+
+trap onSig SIGINT SIGTERM
+
+echo "[sim] Invoked with arguments: ${PIN_ARGS}"
+
+# http://askubuntu.com/questions/299710/how-to-determine-if-a-string-is-a-substring-of-another-in-bash
+if [ "${PIN_ARGS/$APP_ARGS_TOKEN}" = "$PIN_ARGS" ] ; then
+    # No token found
+    :
+else
+    # Token found in the string, so don't use it in the command
+    APP_ARGS_TOKEN=""
+fi
+
+if [ -f $SCRIPTDIR/pinbin ] ; then
+    # Condor jobs use a symlink to the pin binary instead of depending on the
+    # PINPATH environment variable
+    PINBIN=$SCRIPTDIR/pinbin
+else
+    # [victory] On a clean Ubuntu 18.04 install, I hit a segfault when running
+    # the `pin` launcher, which is a 32-bit executable.  To avoid a dependence
+    # on old i386 (32-bit) components, directly invoke the x86_64 Pin binary.
+    PINBIN="${PINPATH}/intel64/bin/pinbin"
+fi
+
+@SCONS_ENV_VARS $PINBIN $PIN_OPTIONS @SCONS_PIN_OPTIONS -t $SCRIPTDIR/speculator.so $APP_ARGS_TOKEN $@ <&0 &
+SIM_PID=$!
+
+# Wait in a loop (because wait returns any time we receive a signal for which
+# a trap has been set) until the simulator is actually finished.
+while kill -0 $SIM_PID &>/dev/null
+do
+    wait $SIM_PID
+    EXIT_STATUS=$?
+done
+exit $EXIT_STATUS

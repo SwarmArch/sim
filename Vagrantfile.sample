@@ -1,0 +1,40 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.require_version ">= 2.1.3"
+
+VAGRANTFILE_API_VERSION = "2"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+  # From the docs, use bento boxes
+  # https://www.vagrantup.com/docs/boxes.html
+  # "It is often a point of confusion, but Canonical (the company that makes the
+  # Ubuntu operating system) publishes boxes under the "ubuntu" namespace on
+  # Atlas. These boxes only support Virtualbox and do not provide an ideal
+  # experience for most users. If you encounter issues with these boxes, please
+  # try the Bento boxes instead."
+  config.vm.box = "bento/ubuntu-18.04"
+  config.vm.hostname = "swarm"
+
+  config.vm.provider "hyperv" do |hv, override|
+    #hv.cpus = 6
+    #hv.maxmemory = 12288
+  end
+
+  config.vm.provider "virtualbox" do |vb, override|
+    #vb.cpus = 6
+    #vb.memory = 12288
+    # While recent versions of VirtualBox enable SSE4 passthrough by default,
+    # explicitly enabling it is required for older versions
+    vb.customize ["setextradata", :id, "VBoxInternal/CPUM/SSE4.1", "1"]
+    vb.customize ["setextradata", :id, "VBoxInternal/CPUM/SSE4.2", "1"]
+    # If you see issues with guest additions needed for shared folders, uncomment this line:
+    #override.vagrant.plugins = ["vagrant-vbguest"]
+  end
+
+  config.vm.provision :shell, path: 'provision.sh'
+
+  # Write lines like this to make directories on your host machine accessible
+  # within the VM:
+  #config.vm.synced_folder "/path/on/host/to/benchmarks/", "/benchmarks"
+end

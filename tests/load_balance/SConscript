@@ -1,0 +1,22 @@
+from __future__ import (absolute_import, division, print_function)
+
+import os
+Import('env')
+
+env = env.Clone()
+
+programs = [os.path.splitext(f.name)[0] for f in Glob("*.cpp")]
+
+for program in programs:
+    if program == 'chain':
+        ipenv = env.Clone()
+        spenv = env.Clone()
+        # sufficient parallelism
+        spenv.Program(target=program+"_sp",
+                      source=[program + '.cpp'] + ['hash.cpp'])
+
+        # insufficient parallleism
+        ipenv["OBJSUFFIX"] = ".oip"
+        ipenv.Append(CPPDEFINES = 'INSUFFICIENT_PARALLELISM')
+        ipenv.Program(target=program+"_ip",
+                      source=[program + '.cpp'] + ['hash.cpp'])

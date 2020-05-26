@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# FIXME(dsm): Lots of duplication with run. May want to merge into a single harness script.
+
+pipe=$(mktemp -u)
+mkfifo $pipe
+exec 9<>$pipe
+rm $pipe
+
+
+PIN_ARGS=$@
+APP_ARGS_TOKEN="--"
+SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+if [ "${PIN_ARGS/$APP_ARGS_TOKEN}" = "$PIN_ARGS" ] ; then
+    :
+else
+    APP_ARGS_TOKEN=""
+fi
+
+
+@SCONS_ENV_VARS $PINPATH/intel64/bin/pinbin $PIN_OPTIONS @SCONS_PIN_OPTIONS -pause_tool 5 -t $SCRIPTDIR/speculator.so $APP_ARGS_TOKEN $@ 1>&9 &
+pid=$!
+dbgSymbolAddrs=`head -n3 <&9 | tail -1`
+#echo $pid $dbgSymbolAddrs
+# See zsim/src/debug_harness.cpp
+xterm -e gdb -p $pid -ex "set confirm off" -ex "$dbgSymbolAddrs" -ex "handle SIGTRAP nostop noprint" -ex "set confirm on" -ex c &
+dbgPid=$!
+
+cat <&9 &
+catPid=$!
+
+wait $pid
+wait $dbgPid
+
+kill $catPid

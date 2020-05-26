@@ -1,0 +1,37 @@
+from __future__ import (absolute_import, division, print_function)
+
+Import('env')
+
+localenv = env.Clone()
+
+simObjs = [localenv.Object(f + '.o', '../' + f + '.cpp')
+           for f in (
+                     'timestamp',
+                     'conflicts/precise_address_accessors',
+                     'conflicts/bloom_address_accessors',
+                     'memory/hash',
+                     'memory/memory_hierarchy',
+                     'stats/table_stat',
+                     )]
+
+localenv.Append(CPPDEFINES = {'SWARM_CACHE_LINE' : '64',
+                              'SWARM_SIM_NO_LOG' : '1',
+                             })
+localenv.Append(CPPFLAGS = ['-std=c++11'])
+if not GetOption('clang'):
+    localenv.Append(CPPFLAGS = ['-fabi-version=2', '-D_GLIBCXX_USE_CXX11_ABI=0'])
+
+gtest_include_paths, libgtest, libgtest_main = SConscript(
+        '#googletest/SConscript',
+        exports={'env': localenv},
+        variant_dir='googletest',
+        duplicate=0)
+localenv.Append(CPPPATH = gtest_include_paths)
+# Use libgtest_main until a custom int main() is necessary
+localenv.Append(LIBS=[libgtest_main, 'pthread'])
+
+localenv.Program(
+    target = 'runTests',
+    # Add all sim objects so that we can unit test classes with cpp components
+    source = Glob('*.cpp') + [simObjs]
+)

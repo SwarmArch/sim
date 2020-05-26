@@ -1,0 +1,183 @@
+Simulator Developer Guide
+=========================
+
+In general, the only documentation for most of the code is the source code
+itself, and the code comments therein.  However, here we provide an overview of
+how the simulator works, and tips for getting started with simulator
+development.
+
+
+Overview
+--------
+
+This simulator is built using Intel's [Pin](http://www.intel.com/software/pintool),
+which is a dynamic binary instrumentation framework.
+But you don't need expertise in Pin or binary instrumentation
+to use the simulator or add features to it.
+You can think of Pin as a virtual machine to run x86 binaries,
+just as the JVM is a virtual machine to run Java bytecode.
+So Pin lets us decode x86 binary instructions, in software, before executing them.
+Pin additionally lets you register for certain functions to be called
+when certain instruction types are encountered in an application.
+(This is called "instrumenting" the application binary, hence "binary instrumentation".)
+
+For example, the simulator instruments any instruction that accesses memory.
+When, say, a store is about to execute, the simulated system state is updated on the fly.
+This includes checking and updating detailed core and cache models,
+possibly creating cache-coherence messages in the on-chip network model,
+and determining at what cycle the store operation would complete.
+Swarm simulations must also check for conflicts and save the old value
+(from the memory address being overwritten) to an undo log.
+After the simulator takes all these actions, the store can finally execute
+and update the application's memory state.
+
+A single simulation thread sequentially executes instructions from all simulated threads,
+as well as all other microarchitectural events in the simulated system.
+The simulation switches between simulating different system components at very fine granularity.
+This allows us to perform faithful cycle-accurate simulation,
+by executing all microarchitectural events in the proper virtual time order.
+The simulator is event-driven, with a priority queue
+(implemented in [driver.cpp](../sim/driver.cpp))
+driving the selection of events to be processed.
+The simulation uses [libspin](https://github.com/SwarmArch/libspin)
+to efficiently perform this sequential execution with frequent context switches.
+
+Most of the code in the simulator that interfaces with Pin to interact with
+instructions in the application binary are in [sim.cpp](../sim/sim.cpp).
+To implement new instructions, we use a hack:
+instead of coming up with new x86 opcodes,
+we repurpose an otherwise valid x86 no-op instruction by adding new side effects.
+For example, the simulator calls `HandleMagicOp()` which performs various actions
+when executing an instruction where `isMagicOpIns()` returns true (i.e., `xchg %rcx, %rcx`).
+This approach lets us use inline assembly to make ordinary GCC or Clang
+generate binaries with "new" instructions, and existing debuggers and disassemblers
+won't complain when decoding binaries with these "new" instructions.
+The downside is incorrect simulation of any application that happens to
+use `xchg %rcx, %rcx` as a no-op, but we've seen no occurrences of this.  🤞
+
+The simulator implements many models of microarchitectural features.
+Swarm adds new hardware features in the form of task units,
+virtual time arbiters, and conflict detection in the cache hierarchy.
+The code refers to each of Swarm's task units
+(which combines a task queue and a commit queue) as a `ROB`,
+and these are implemented in [rob.cpp](../sim/rob.cpp).
+Virtual time arbiters are in [gvt_arbiter.cpp](../sim/gvt_arbiter.cpp).
+The logic for detecting conflicts and deciding what tasks should abort
+lives in the [conflicts](../sim/conflicts/) subdirectory.
+When reading Swarm code, you might find lingering references to "PLS",
+which was an early codename for Swarm.
+
+### Deep Dive: How does `swarm::run()` work?
+
+Let's assume you already understand [how to use](UserGuide.mdown) `swarm::run()`.
+We can use it as a case study to see how software-hardware interactions
+are implemented with this simulator.  `swarm::run` is implemented in
+[swarm_runtime.h](https://github.com/SwarmArch/runtime/blob/master/include/swarm/impl/swarm_runtime.h#L38),
+which calls `launch_threads` in
+[hwmisc.h](https://github.com/SwarmArch/runtime/blob/master/include/swarm/impl/hwmisc.h)
+to spawn a bunch of pthreads, one for each simulated core or hardware thread,
+and each thread runs the function `pls_worker`.
+`pls_worker` does a bunch of setup at the start of each thread,
+but the main action is in its call `sim_task_dequeue_runloop`,
+which is implemented as a bunch of hand-coded assembly in
+[hooks.h](https://github.com/SwarmArch/runtime/blob/master/include/swarm/hooks.h).
+
+In this hand-coded assembly, there's an `xchg %rdx, %rdx` instruction
+(which is the task-dequeue instruction) at label 1,
+and the very next instruction is label 2.
+Before the dequeue instruction, there's a `MAGIC_OP_TASK_DEQUEUE_SETUP`
+that passes the address of label 1 in %rsi and %rdi, and the address of label 2 in %rdx.
+The implementation of `MAGIC_OP_TASK_DEQUEUE_SETUP` in [sim.cpp](../sim/sim.cpp)
+stores the value from %rsi and %rdi (the address of the dequeue instruction)
+in `curThread->finishPc` and `curThread->abortPc`,
+and stores value of %rdx (the address of the following instruction)
+in `curThread->donePc`.
+
+At runtime, each time the `xchg %rdx, %rdx` executes,
+the simulator runs the function `HandleDequeueMagicOp` in [sim.cpp](../sim/sim.cpp).
+The first time it runs, it saves the thread's original %rsp (stack pointer) value
+to `curThread->rspCheckpoint`. Then, in the normal case that the task-dequeue succeeds
+in obtaining a task to run, `HandleDequeueMagicOp` proceeds to call `DispatchTaskToContext`
+to begin the task's execution.  The implementation of `DispatchTaskToContext`
+sets the values of several registers according to the task's arguments,
+and sets %rip (the program counter) to the task's function pointer value,
+causing execution to jump to the task function.
+
+A task can finish execution by executing another dequeue instruction.
+(There is no separate finish-task instruction.)
+`DispatchTaskToContext` also places the value from `curThread->finishPc`
+(which is the address of the dequeue instruction in `sim_task_dequeue_runloop`)
+at the top of the thread's stack before executing a task function,
+so a task function can simply return, with a return address that jumps
+to execute the dequeue instruction again.
+(Similarly, if a task aborts while it's executing, then
+the simulator will call `AbortTaskOnThread` to set %rip to `curThread->abortPc`,
+which is also the address of the dequeue instruction.)
+That's how each thread continues to dequeue and execute any available tasks.
+
+When `HandleDequeueMagicOp` attempts to dequeue a task from the task unit,
+there might be no available task, in which case the thread blocks,
+so the simulator will not execute any more actions from that thread.
+Later, if some tasks become available, the `ROB` has condition variables
+named `rqNotEmpty` and `rqHasRunnable` that get notified,
+which may wake up blocked threads so they attempt to re-execute the dequeue instruction,
+which might succeed in obtaining a task.
+
+When a `ROB` has no tasks remaining, it will report
+a local virtual time (LVT) of infinity to the virtual time arbiter(s).
+When all tasks have finished execution and committed, so there is nothing left
+in any task or commit queue, then every tile will report a LVT of infinity,
+so the arbiter(s) will broadcast that the global virtual time (GVT) has reached infinity.
+At that point that `ROB::terminate` can return `true`.  All threads will be woken up,
+and they'll try to execute the dequeue instruction one final time.  This final execution of
+`HandleDequeueMagicOp` restores the value from `curThread->rspCheckpoint` to %rsp
+and sets %rip to `curThread->donePc`, which is address of the instruction after
+the dequeue instruction in `sim_task_dequeue_runloop`. At this point,
+`sim_task_dequeue_runloop` can finally run to completion and return to `pls_worker`,
+which each thread finishes executing.  `launch_threads` joins on all its pthreads,
+so it returns to `swarm::run` only after the workers finish.  Finally, `swarm::run`
+returns to serial execution of whatever remains in the application program.
+
+
+Debugging
+---------
+
+TODO: Explain how to use the simulator's interactive mode.
+
+The simulator, as a Pintool, can also be debugged by passing the
+`-pause_tool [seconds]` option to Pin. This option pauses Pin for the
+specified number of seconds as you attach GDB to the Pintool.
+
+Before launching the simulator, prepare GDB to attach to the Pintool. Fill
+in `[pid]` with the process ID provided by Pin as you launch the
+simulator.
+```bash
+$ gdb -p [pid]
+```
+or
+```bash
+$ gdb
+GNU gdb (Ubuntu 7.7.1-0ubuntu5~14.04.3) 7.7.1
+Copyright (C) 2014 Free Software Foundation, Inc.
+ ...
+No symbol table is loaded.  Use the "file" command.
+(gdb) attach [pid]
+```
+
+If using tmux or screen, split the pane horizontally, as Pin will print a
+long command to load debugging information.
+
+Supply the `-pause_tool 10` option to the `PIN_OPTIONS` environment
+variable and launch the simulator:
+```bash
+$ PIN_OPTIONS="-pause_tool 10" ./build/opt/sim/sim -config sample.cfg -- ./build/opt/tests/swarm/bfs 2000 8
+[sim] Invoked with arguments: -config sample.cfg -- ./build/opt/tests/swarm/bfs 2000 8
+[sim] Built Mon Jan 21 16:29:48 EST 2019 (rev debugging-readme:4307:d6a2c1b:clean)
+Pausing for 10 seconds to attach to process with pid 54976
+To load the tool's debug info to gdb use:
+   add-symbol-file .../build/opt/sim/speculator_fast.so 0x7fc7097a7450 -s .data 0x7fc70a2a5020 -s .bss 0x7fc70a2a6a00
+```
+Copy the pid over to your waiting GDB command and use the provided
+`add-symbol-file` command to load debugging information.
+
+Note: the simulator hits two SIGTRAPs before simulation starts.
