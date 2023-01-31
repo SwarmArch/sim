@@ -34,7 +34,7 @@ Setup
 Dependencies:
 - Linux on x86_64: We've tested with Ubuntu 14.04, 16.04, and 18.04.
   If you want to run this in a VM, see Vagrant setup below.
-- GCC: Version 4.8 or newer will suffice to build the simulator itself, which
+- GCC: Version >= 4.8 and <= 9.5 will suffice to build the simulator itself, which
   is written in C++11 and depends on a particular GCC ABI.  (Clang won't work.)
   Test applications are written in C++14 so they can build with GCC 5+ or Clang.
 - Pin version 2.14: Download this from
