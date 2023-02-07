@@ -165,7 +165,7 @@ public:
     // Unordered tasks indicated as using soft priority will take on the programmer-
     // specified timestamp as their soft timestamp, meaning that the tasks will be
     // dequeued in the soft timestamp order.
-    const uint64_t softTs;
+    uint64_t softTs;
 
     // Must this task be executed speculatively? Can it be run speculatively,
     // but also non-speculatively when its parent commits and assuming perfect

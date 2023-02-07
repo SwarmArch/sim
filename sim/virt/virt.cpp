@@ -27,6 +27,7 @@
 /* This file was adapted from zsim. */
 
 #include <syscall.h>
+#include <errno.h>
 #include "sim/log.h"
 #include "sim/sim.h"
 #include "sim/virt/virt.h"
@@ -57,26 +58,38 @@ bool syscallEnter(spin::ThreadId tid, spin::ThreadContext* ctxt) {
     uint64_t syscall = spin::getReg(ctxt, REG_RAX);
     DEBUG("[%d] syscall %ld", tid, syscall);
 
-    // glibc version 2.28+, if built with GCC's -fcf-protection, will have
-    // init_cpu_features() (which runs early on during the execution of any
-    // process) attempt to call the nonexisting ARCH_CET_STATUS (0x3001)
-    // subfunction of arch_prctl.  See:
-    // https://sourceware.org/git/?p=glibc.git;a=commit;h=394df3815e8ceec750fd06583eee4896174ce808
-    // This became the default in Ubuntu 19.10+.  See:
-    // https://wiki.ubuntu.com/ToolChain/CompilerFlags#A-fcf-protection
-    // Pin v2.14 crashes when it sees this unexpected arch_prctl subfunction.
-    // Avoid the crash by just pretending to execute the syscall instruction
-    // while skipping over it.
-    if (syscall == SYS_arch_prctl && spin::getReg(ctxt, REG_RDI) == 0x3001) {
-        spin::setReg(ctxt, REG::REG_RIP,
-                     spin::getReg(ctxt, REG::REG_RIP) +
-                         2/*bytes in fast system call instruction*/);
+     // glibc version 2.28+, if built with GCC's -fcf-protection, will have
+     // init_cpu_features() (which runs early on during the execution of any
+     // process) attempt to call the nonexisting ARCH_CET_STATUS (0x3001)
+     // subfunction of arch_prctl.  See:
+     // https://sourceware.org/git/?p=glibc.git;a=commit;h=394df3815e8ceec750fd06583eee4896174ce808
+     // This became the default in Ubuntu 19.10+.  See:
+     // https://wiki.ubuntu.com/ToolChain/CompilerFlags#A-fcf-protection
+     // Pin v2.14 crashes when it sees this unexpected arch_prctl subfunction.
+     // Avoid the crash by just pretending to execute the syscall instruction
+     // while skipping over it.
+     if (syscall == SYS_arch_prctl && spin::getReg(ctxt, REG_RDI) == 0x3001) {
+	     DEBUG("[%d] ignoring prtcl", tid);
+     	spin::setReg(ctxt, REG::REG_RIP,
+                 spin::getReg(ctxt, REG::REG_RIP) +
+                      2/*bytes in fast system call instruction*/);
         spin::setReg(ctxt, REG::REG_RAX,
                      -1UL/*indicates failure of syscall, as glibc expects*/);
         return false;
     }
 
+    //clone3 syscall used by glibc in ubuntu 22.04 when spawning threads fails
+    //here, but will fallback to clone if errno is ENOSYS
+    //
+    //So pretend to fail with this errno, similar to above
+    if (syscall == SYS_clone3) {
+	spin::setReg(ctxt, REG_RAX, -ENOSYS);
+	spin::setReg(ctxt, REG_RIP, spin::getReg(ctxt, REG_RIP) + 2);
+	return false;
+    }
+
     if (!IsInFastForward()) {
+	    DEBUG("[%d] non-ff syscall", tid);
       // Perform reads/writes to syscall input/output data to reflect its memory
       // behavior. This avoids conflicts on syscall data.
       if (syscall == SYS_read) {
@@ -117,6 +130,7 @@ bool syscallEnter(spin::ThreadId tid, spin::ThreadContext* ctxt) {
         default: break;
     }
     if (keepThreadCaptured) syncSyscallTid = tid;
+    DEBUG("[%d] returning %d", tid, !keepThreadCaptured);
     return !keepThreadCaptured;
 }
 
