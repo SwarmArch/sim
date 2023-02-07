@@ -24,9 +24,7 @@ if not GetOption('clang'):
     env.Append(CPPFLAGS = ['-no-pie', '-fno-PIE'])
     env.Append(LINKFLAGS = ['-no-pie', '-fno-PIE'])
 print('Checking whether compiler supports stack-clash prevention and Intel CET...')
-# These flags don't exist prior to GCC 8.
 testEnv = env.Clone()
-#env.Append(CPPFLAGS = ['-fno-stack-clash-protection', '-fcf-protection=none'])
 testEnv.Append(CPPFLAGS = ['-fno-stack-clash-protection', '-fcf-protection=none'])
 conf = Configure(testEnv)
 flagsAreSupported = conf.CheckCXX()
