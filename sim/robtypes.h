@@ -37,11 +37,11 @@ using ExecQ_ty = fixed_capacity_ordered_set<
 
 // The RunQ sorts tasks by their timestamp and deprioritizes producers. It uses
 // a global_fun key extractor to allow calls to lower/upper_bound to use keys.
-using RunQ_key_ty = std::tuple<const TimeStamp&, uint8_t>;
+using RunQ_key_ty = std::tuple<const TimeStamp&, uint64_t, uint8_t>;
 inline RunQ_key_ty getRunQKey(const TaskPtr& t) {
     // Given an equal choice between running a programmer-defined producer and a
     // requeuer, choose the normal producer
-    return std::make_tuple(std::cref(t->lts()),
+    return std::make_tuple(std::cref(t->lts()), t->softTs,
                            (t->isProducer() << 1) | t->isRequeuer());
 }
 using RunQ_ty = ordered_pointer_set<TaskPtr, ordered_non_unique<global_fun<const TaskPtr&, RunQ_key_ty, getRunQKey>>, RunQ_key_ty>;

@@ -1017,10 +1017,10 @@ TaskPtr ROB::removeUntiedTaskImpl(const uint64_t taskFn,
     // FIXME(dsm): Use multi-index::range()
     auto start =
              boost::make_reverse_iterator(runQueue.lower_bound(
-                  std::make_tuple(std::cref(maxTS), false)));
+                  std::make_tuple(std::cref(maxTS), 0, false)));
     auto end =
              boost::make_reverse_iterator(runQueue.lower_bound(
-                         std::make_tuple(std::cref(minTS), false)));
+                         std::make_tuple(std::cref(minTS), 0, false)));
 
     // For liveness: we don't want to spill the minimum task.
     // Spilling that task would certainly induce a swarm::requeuer(...) of
@@ -1284,7 +1284,8 @@ std::pair<TaskPtr, rob::Stall> ROB::taskToRun(ThreadID tid) {
         // Find all tasks with the same timestamp, including all producers
         TimeStamp ubTs = runQueue.min()->lts();
         ubTs.clearTieBreaker();
-        auto ub = runQueue.upper_bound(std::make_tuple(std::cref(ubTs), true));
+        auto ub = runQueue.upper_bound(std::make_tuple(std::cref(ubTs), 
+		runQueue.min()->softTs, true));
         ub = std::prev(ub);
 
         // Manually check if std::distance(rq.begin(), ub) < underflow.

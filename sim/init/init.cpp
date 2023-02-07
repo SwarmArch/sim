@@ -916,6 +916,8 @@ static void InitSystem(const Config& config) {
     initinfo->usePreciseAddressSets = ("Precise" == std::string(
                 config.get<const char*>("sys.robs.addressSet.type", "Bloom")));
 
+    initinfo->relaxed = config.get<bool>("sys.robs.relaxedOrder", false);
+
     uint32_t maxFrameDepth =
         config.get<uint32_t>("sys.robs.maxFrameDepth", UINT32_MAX);
     //FIXME(victory): Remove this hack when we have a less-broken

@@ -605,7 +605,8 @@ spin::ThreadId HandleSetGvtMagicOp(spin::ThreadId tid, uint64_t cycle, spin::Thr
 }
 
 static void DispatchTaskToContext(const Task& task, spin::ThreadContext* ctxt) {
-    spin::setReg(ctxt, REG::REG_RDI, task.ts.app());
+    if (task.softTs) spin::setReg(ctxt, REG::REG_RDI, task.softTs);
+    else spin::setReg(ctxt, REG::REG_RDI, task.ts.app());
 
     const uint32_t numArgs = task.args.size();
     constexpr REG regs[] = {REG::REG_RSI, REG::REG_RDX, REG::REG_RCX,
@@ -875,7 +876,7 @@ spin::ThreadId HandleEnqueueMagicOp(const uint64_t op,
     const bool requeuer = op & EnqFlags::REQUEUER;
     const bool maySpec = op & EnqFlags::MAYSPEC;
     const bool cantSpec = op & EnqFlags::CANTSPEC;
-    const bool isSoftPrio = op & EnqFlags::ISSOFTPRIO;
+    const bool isSoftPrio = op & EnqFlags::ISSOFTPRIO || ossinfo->relaxed;
     const bool runOnAbort = op & EnqFlags::RUNONABORT;
     const bool noTimestamp = op & EnqFlags::NOTIMESTAMP || runOnAbort;
     const bool nonSerialHint = op & EnqFlags::NONSERIALHINT;
@@ -1016,13 +1017,14 @@ spin::ThreadId HandleEnqueueMagicOp(const uint64_t op,
             assert(curThread->tid == parent->runningTid);
             assert(curThread->state != BLOCKED);
             curThread->core->finishTask(curThread->tid);
+	    if (ossinfo->relaxed) parent->softTs = tsApp;
             GetCurRob().yieldTask(parent,
                     // Advance the requeuer's timestamp if its next minimum
                     // child is timestamped, otherwise be conservative and reuse
                     // the requeuer's old timestamp.
                     // N.B. if an ordinary requeuer is yielding while enqueuing
                     // a frame requeuer, we are really using the tsApp value.
-                    noTimestamp ? parent->ts.app() : tsApp);
+                    noTimestamp || isSoftPrio ? parent->ts.app() : tsApp);
             curThread->task = nullptr;
 
             assert(curThread->rspCheckpoint);

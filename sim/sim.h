@@ -155,6 +155,8 @@ struct GlobSimInfo {
     std::vector<ROB*> robs;
     std::vector<TSB*> tsbs;
     std::vector<ThreadThrottlerUnit*> throttlers;
+
+    bool relaxed;
 };
 
 extern const GlobSimInfo* ossinfo;
