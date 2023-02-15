@@ -22,20 +22,15 @@ if mode not in allowedModes:
 env = Environment(ENV = os.environ, tools = ['default', 'textfile'])
 env.Append(LINKFLAGS=["-Wl,--no-undefined"])
 
-# Watch for a particular submodule commits
-# NOTE: Update the commit hash if you add a necessary feature to a submodule
-neededCommits = {
-        'googletest': '72810c74137d923fd7604ba4c648247fc715fae5',
-        'libspin': 'dc03f57f67afcfec03db3c7a3e4667d2816724e1',
-        'plsalloc': '9aa41b90b55c239b60f65ccc94722ba5f5704627',
-        'runtime': 'c471a79bf255c3732eef90258765d4dc8ed2c93c',
-        }
-for submodule in neededCommits:
-    submodulePath = os.path.join(Dir('#').srcnode().abspath, submodule)
+for submodulePath in subprocess.check_output(
+                ['git', 'submodule', '--quiet', 'foreach', 'realpath .'],
+                universal_newlines=True).split('\n'):
+    if not submodulePath.strip():
+        continue
 
     # Automatically clone submodules if user hasn't done so
-    if not os.path.exists(submodule) or not os.listdir(submodule):
-        print('Cloning %s...' % submodule)
+    if not os.path.exists(submodulePath) or not os.listdir(submodulePath):
+        print('Cloning %s...' % submodulePath)
         env.Execute('git submodule update --init --remote ' + submodulePath)
 
     commits = ''
@@ -45,11 +40,13 @@ for submodule in neededCommits:
                 shell=True, universal_newlines=True)
     except subprocess.CalledProcessError:
         pass
-    neededCommit = neededCommits[submodule]
+    _, neededCommit, _ = subprocess.check_output(
+            ['git', 'ls-files', '--stage', submodulePath],
+            universal_newlines=True).split(maxsplit=2)
     if neededCommit not in commits:
-        print('ERROR:', submodule, 'commit', neededCommit, 'not found. Please run:')
-        print('    git submodule update --init --remote', submodulePath)
-        print('You may also need to pass `--checkout --force` to git submodule update')
+        print('ERROR: commit', neededCommit, 'not found in', submodulePath)
+        print('Please run:')
+        print('    git submodule update --init --remote --checkout', submodulePath)
         Exit(1)
 
 if GetOption('clang'):

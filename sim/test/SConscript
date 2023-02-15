@@ -18,15 +18,14 @@ localenv.Append(CPPDEFINES = {'SWARM_CACHE_LINE' : '64',
                               'SWARM_SIM_NO_LOG' : '1',
                              })
 localenv.Append(CPPFLAGS = ['-std=c++11'])
-if not GetOption('clang'):
-    localenv.Append(CPPFLAGS = ['-fabi-version=2', '-D_GLIBCXX_USE_CXX11_ABI=0'])
 
-gtest_include_paths, libgtest, libgtest_main = SConscript(
+gtest_include_path, libgtest, libgtest_main = SConscript(
         '#googletest/SConscript',
         exports={'env': localenv},
         variant_dir='googletest',
         duplicate=0)
-localenv.Append(CPPPATH = gtest_include_paths)
+#localenv.Append(CPPPATH = gtest_include_path)
+localenv.Append(CPPFLAGS = ['-isystem', gtest_include_path])
 # Use libgtest_main until a custom int main() is necessary
 localenv.Append(LIBS=[libgtest_main, 'pthread'])
 
