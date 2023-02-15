@@ -28,5 +28,12 @@
 
 std::unique_ptr<TaskLoadProfiler> createTaskLoadProfiler(LoadStatsSummary* summary) {
     if (summary) return std::make_unique<TaskLoadProfiler>(*summary);
-    else return nullptr;
+
+    //return nullptr;
+    // GCC 11 (Ubuntu 22.04) has a bug in the libstdc++ implementation of
+    // std::unique_ptr's default constructor as well as the converting
+    // constructor from std::nullptr_t, if you pass --fabi-version=2 to g++, as
+    // we must do here for our simulator Pintool.  The workaround is to do this
+    // explicit construction:
+    return std::unique_ptr<TaskLoadProfiler>((TaskLoadProfiler*)nullptr);
 }

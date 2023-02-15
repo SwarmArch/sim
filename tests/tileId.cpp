@@ -35,7 +35,7 @@ constexpr unsigned NP = 1024u;
 
 std::array<uint64_t, NP> counters = {0};
 
-static void checkSameHint(swarm::Timestamp, int tileId) {
+static void checkSameHint(swarm::Timestamp, unsigned tileId) {
     assert(tileId == swarm::tileId());
 }
 
@@ -63,7 +63,7 @@ int main(int argc, const char** argv) {
     swarm::run();
 
     std::array<uint64_t, NP> expected = {0};
-    for (int i = 0; i < numTiles; i++) expected[i] = 2 * i + numTiles;
+    for (unsigned i = 0; i < numTiles; i++) expected[i] = 2 * i + numTiles;
     tests::assert_eq(expected, counters);
     return 0;
 }
